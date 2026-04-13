@@ -11,53 +11,48 @@ st.title("🛡️ HighStakes Elite Command Center")
 SIMS = 10000
 
 # ==============================
-# MODEL HANDLING (Auto-create if missing)
+# MODEL HANDLING
 # ==============================
 
 def create_dummy_models():
-    """Create realistic dummy models when .pkl files don't exist"""
     np.random.seed(42)
-    
-    # Create synthetic training data based on football statistics relationships
     n_samples = 1000
+    X = np.random.rand(n_samples, 21)  # Increased features
     
-    # Generate realistic features
-    X = np.random.rand(n_samples, 19)
-    # Scale features to realistic ranges
-    X[:, 0] *= 10   # h_sot (0-10)
-    X[:, 1] *= 5    # h_bc (0-5)
-    X[:, 2] *= 3    # h_gpg (0-3)
-    X[:, 3] *= 3    # h_con (0-3)
-    X[:, 6] *= 10   # a_sot (0-10)
-    X[:, 7] *= 5    # a_bc (0-5)
-    X[:, 8] *= 3    # a_gpg (0-3)
-    X[:, 9] *= 3    # a_con (0-3)
+    X[:, 0] *= 10   # h_sot
+    X[:, 1] *= 5    # h_bc
+    X[:, 2] *= 3    # h_gpg
+    X[:, 3] *= 3    # h_con
+    X[:, 6] *= 10   # a_sot
+    X[:, 7] *= 5    # a_bc
+    X[:, 8] *= 3    # a_gpg
+    X[:, 9] *= 3    # a_con
+    X[:, 19] *= 20  # h_position (1-20)
+    X[:, 20] *= 20  # a_position (1-20)
     
-    # Home goals: based on shots on target, big chances, form, opponent defense
     y_home = (
-        X[:, 0] * 0.15 +      # SoT contribution
-        X[:, 1] * 0.4 +       # Big chances (high weight)
-        X[:, 2] * 0.3 +       # Historical goals
-        (3 - X[:, 9]) * 0.2 + # Opponent defense weakness
-        X[:, 12] * 0.5 +      # Home form
+        X[:, 0] * 0.15 +
+        X[:, 1] * 0.4 +
+        X[:, 2] * 0.3 +
+        (3 - X[:, 9]) * 0.2 +
+        X[:, 12] * 0.5 +
+        (21 - X[:, 19]) * 0.05 +  # Better position = more goals
         np.random.normal(0, 0.3, n_samples)
     ).clip(0.1, 4.0)
     
-    # Away goals: similar but away disadvantage
     y_away = (
         X[:, 6] * 0.12 +
         X[:, 7] * 0.35 +
         X[:, 8] * 0.3 +
         (3 - X[:, 3]) * 0.15 +
         X[:, 13] * 0.4 +
-        np.random.normal(0, 0.25, n_samples) - 0.3  # Away penalty
+        (21 - X[:, 20]) * 0.04 +
+        np.random.normal(0, 0.25, n_samples) - 0.3
     ).clip(0.1, 3.5)
     
-    # Corners models
     y_corners_h = (X[:, 0] * 0.8 + X[:, 2] * 2 + np.random.normal(4, 1.5, n_samples)).clip(1, 15)
     y_corners_a = (X[:, 6] * 0.7 + X[:, 8] * 1.8 + np.random.normal(3.5, 1.5, n_samples)).clip(1, 12)
     
-    # Train models
     home_model = RandomForestRegressor(n_estimators=50, random_state=42)
     away_model = RandomForestRegressor(n_estimators=50, random_state=42)
     corner_home_model = RandomForestRegressor(n_estimators=30, random_state=42)
@@ -68,7 +63,6 @@ def create_dummy_models():
     corner_home_model.fit(X, y_corners_h)
     corner_away_model.fit(X, y_corners_a)
     
-    # Save them
     joblib.dump(home_model, "home_model.pkl")
     joblib.dump(away_model, "away_model.pkl")
     joblib.dump(corner_home_model, "corner_home_model.pkl")
@@ -77,7 +71,6 @@ def create_dummy_models():
     return home_model, away_model, corner_home_model, corner_away_model
 
 def load_models():
-    """Load existing or create new models"""
     model_files = ["home_model.pkl", "away_model.pkl", "corner_home_model.pkl", "corner_away_model.pkl"]
     
     if all(os.path.exists(f) for f in model_files):
@@ -95,7 +88,6 @@ def load_models():
         st.info("🤖 Creating prediction models for the first time...")
         return create_dummy_models()
 
-# Load or create models
 home_model, away_model, corner_home_model, corner_away_model = load_models()
 
 # ==============================
@@ -111,6 +103,24 @@ intensity_map = {
     "Cup Final": 1.25, "Relegation": 1.2, "Title": 1.3
 }
 
+# NEW: H2H as dropdown instead of slider
+h2h_map = {
+    "Strong Home H2H": 0.25,
+    "Slight Home H2H": 0.12,
+    "Neutral": 0.0,
+    "Slight Away H2H": -0.12,
+    "Strong Away H2H": -0.25
+}
+
+# NEW: Lineup strength impact
+lineup_map = {
+    "Full A-Team": 1.0,
+    "Mostly A-Team (1-2 changes)": 0.95,
+    "Mixed (Rotation)": 0.85,
+    "Mostly B-Team": 0.75,
+    "Full B-Team/Youth": 0.65
+}
+
 def form_score(f):
     if not f:
         return 1.0
@@ -118,7 +128,7 @@ def form_score(f):
     return 0.5 + (pts / (len(f) * 3)) * 0.8
 
 # ==============================
-# 🏥 INJURY SYSTEM (ADVANCED)
+# 🏥 INJURY SYSTEM
 # ==============================
 
 injury_severity = {
@@ -176,9 +186,6 @@ def injury_input_block(team_name, key):
 if "player_db" not in st.session_state:
     st.session_state.player_db = {}
 
-def save_player(name, pos, role):
-    st.session_state.player_db[name] = {"pos": pos, "role": role}
-
 # ==============================
 # INPUT UI
 # ==============================
@@ -194,6 +201,8 @@ with st.form("match"):
         h_cs = st.number_input("Clean Sheets", 0.0, 1.0, 0.3)
         h_pos = st.number_input("Possession", 0.0, 100.0, 55.0)
         h_form = st.text_input("Form", "WWDLW")
+        # NEW: League position
+        h_position = st.number_input("League Position (Home)", 1, 20, 5)
     
     with col2:
         a_name = st.text_input("Away Team")
@@ -204,10 +213,22 @@ with st.form("match"):
         a_cs = st.number_input("Clean Sheets ", 0.0, 1.0, 0.2)
         a_pos = st.number_input("Possession ", 0.0, 100.0, 45.0)
         a_form = st.text_input("Form ", "LDWLL")
+        # NEW: League position
+        a_position = st.number_input("League Position (Away)", 1, 20, 12)
     
+    # Match context
     league = st.selectbox("League", list(league_map.keys()))
     intensity = st.selectbox("Match Type", list(intensity_map.keys()))
-    h2h = st.slider("H2H", -0.3, 0.3, 0.0)
+    
+    # CHANGED: H2H dropdown instead of slider
+    h2h = st.selectbox("Head-to-Head History", list(h2h_map.keys()))
+    
+    # NEW: Lineup strength selectors
+    col_lineup1, col_lineup2 = st.columns(2)
+    with col_lineup1:
+        h_lineup = st.selectbox("Home Lineup Strength", list(lineup_map.keys()))
+    with col_lineup2:
+        a_lineup = st.selectbox("Away Lineup Strength", list(lineup_map.keys()))
     
     # INJURIES
     st.markdown("## 🏥 Injury System")
@@ -224,6 +245,12 @@ with st.form("match"):
     bk1 = st.number_input("Home Odds", 1.0, 10.0, 1.8)
     bkx = st.number_input("Draw Odds", 1.0, 10.0, 3.5)
     bk2 = st.number_input("Away Odds", 1.0, 10.0, 4.5)
+    bk_btts = st.number_input("BTTS Odds", 1.0, 10.0, 1.7)
+    bk_o25 = st.number_input("Over 2.5 Odds", 1.0, 10.0, 1.6)
+    bk_o15 = st.number_input("Over 1.5 Odds", 1.0, 10.0, 1.3)
+    bk_o35 = st.number_input("Over 3.5 Odds", 1.0, 10.0, 2.5)
+    bk_corners = st.number_input("Corners >9.5 Odds", 1.0, 10.0, 1.9)
+    bk_3plus = st.number_input("3+ Goals Streak (Yes) Odds", 1.0, 10.0, 1.6)
     
     run = st.form_submit_button("RUN SIM")
 
@@ -231,29 +258,53 @@ with st.form("match"):
 # RUN ENGINE
 # ==============================
 if run:
+    # Apply lineup strength adjustments
+    h_lineup_factor = lineup_map[h_lineup]
+    a_lineup_factor = lineup_map[a_lineup]
+    
     features = np.array([[
-        h_sot, h_bc, h_gpg, h_con, h_cs, h_pos,
-        a_sot, a_bc, a_gpg, a_con, a_cs, a_pos,
-        form_score(h_form), form_score(a_form),
-        (h_att_inj + h_def_inj), (a_att_inj + a_def_inj),
-        league_map[league], intensity_map[intensity],
-        h2h
+        h_sot * h_lineup_factor,  # Adjust stats by lineup quality
+        h_bc * h_lineup_factor,
+        h_gpg * h_lineup_factor,
+        h_con * (2 - h_lineup_factor),  # Weaker lineup = more conceded
+        h_cs * h_lineup_factor,
+        h_pos * h_lineup_factor,
+        a_sot * a_lineup_factor,
+        a_bc * a_lineup_factor,
+        a_gpg * a_lineup_factor,
+        a_con * (2 - a_lineup_factor),
+        a_cs * a_lineup_factor,
+        a_pos * a_lineup_factor,
+        form_score(h_form) * h_lineup_factor,  # Form also affected by lineup
+        form_score(a_form) * a_lineup_factor,
+        (h_att_inj + h_def_inj),
+        (a_att_inj + a_def_inj),
+        league_map[league],
+        intensity_map[intensity],
+        h2h_map[h2h],  # Use mapped value
+        h_position,    # NEW: League position
+        a_position     # NEW: League position
     ]])
     
     h_xg = home_model.predict(features)[0]
     a_xg = away_model.predict(features)[0]
     
-    # 🔥 DEFENSIVE INJURY BOOST
+    # Apply defensive injury boost (opponent's defense weakened)
     h_xg *= (1 + a_def_inj)
     a_xg *= (1 + h_def_inj)
     
-    # Apply league and intensity adjustments
+    # Apply league and intensity
     h_xg *= league_map[league] * intensity_map[intensity]
     a_xg *= league_map[league] * intensity_map[intensity]
     
-    # H2H adjustment
-    h_xg += h2h
-    a_xg -= h2h
+    # Apply H2H adjustment
+    h_xg += h2h_map[h2h]
+    a_xg -= h2h_map[h2h]
+    
+    # Apply standing/position adjustment (better position = better performance)
+    position_diff = (21 - h_position) - (21 - a_position)  # Higher number = better
+    h_xg += position_diff * 0.03
+    a_xg -= position_diff * 0.03
     
     # Ensure positive xG
     h_xg = max(0.1, h_xg)
@@ -268,8 +319,10 @@ if run:
         corner_away_model.predict(features)[0], SIMS
     )
     
+    streak_3plus = total >= 3
+    
     df = pd.DataFrame({
-        "Market": ["Home", "Draw", "Away", "BTTS", "O2.5", "O1.5", "O3.5", "Corners>9.5"],
+        "Market": ["Home", "Draw", "Away", "BTTS", "O2.5", "O1.5", "O3.5", "Corners>9.5", "3+ Goals Streak"],
         "Prob": [
             np.mean(h_sim > a_sim),
             np.mean(h_sim == a_sim),
@@ -278,21 +331,43 @@ if run:
             np.mean(total > 2.5),
             np.mean(total > 1.5),
             np.mean(total > 3.5),
-            np.mean(corners > 9.5)
+            np.mean(corners > 9.5),
+            np.mean(streak_3plus)
         ],
-        "Odds": [bk1, bkx, bk2, 1.7, 1.6, 1.3, 2.5, 1.9]
+        "Odds": [bk1, bkx, bk2, bk_btts, bk_o25, bk_o15, bk_o35, bk_corners, bk_3plus]
     })
     
     df["Edge %"] = (df["Prob"] * df["Odds"] - 1) * 100
     
     # Display results
     st.subheader("📊 Prediction Results")
-    st.dataframe(df.style.format({"Prob": "{:.1%}", "Edge %": "{:.1f}%"}))
     
-    col1, col2, col3 = st.columns(3)
+    # Color coding for edges
+    def color_edge(val):
+        if val > 5:
+            return 'background-color: #006400; color: white'  # Dark green
+        elif val > 0:
+            return 'background-color: #90EE90'  # Light green
+        elif val > -5:
+            return 'background-color: #FFB6C1'  # Light red
+        else:
+            return 'background-color: #8B0000; color: white'  # Dark red
+    
+    styled_df = df.style.format({"Prob": "{:.1%}", "Edge %": "{:.1f}%"})\
+                       .applymap(color_edge, subset=['Edge %'])
+    
+    st.dataframe(styled_df)
+    
+    # Key metrics
+    col1, col2, col3, col4 = st.columns(4)
     col1.metric("Home xG", f"{h_xg:.2f}")
     col2.metric("Away xG", f"{a_xg:.2f}")
-    col3.metric("Confidence", f"{abs(h_xg - a_xg):.2f}")
+    col3.metric("Total xG", f"{h_xg + a_xg:.2f}")
+    col4.metric("Model Confidence", f"{abs(h_xg - a_xg):.2f}")
+    
+    # Context info
+    st.caption(f"Lineup Impact: Home {h_lineup_factor:.0%} | Away {a_lineup_factor:.0%}")
+    st.caption(f"Standing Impact: Position {h_position} vs {a_position}")
     
     # Most likely scorelines
     st.subheader("🔮 Most Likely Scorelines")
@@ -306,10 +381,11 @@ if run:
         'Probability': [f"{c/SIMS:.1%}" for c in score_counts.values]
     })
     st.table(score_df)
-    df["Edge %"] = ((df["Prob"] * df["Odds"]) - 1) * 100
-
-    st.dataframe(df.style.format({"Prob":"{:.1%}","Edge %":"{:.1f}%"}))
-
-    # CONFIDENCE
-    confidence = abs(h_xg - a_xg)
-    st.metric("Model Confidence", f"{confidence:.2f}")
+    
+    # 3+ Goals Streak specific
+    st.subheader("🎯 3+ Goals Streak Analysis")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("3+ Goals Probability", f"{np.mean(streak_3plus):.1%}")
+    col2.metric("Odds", f"{bk_3plus:.2f}")
+    col3.metric("Edge", f"{(np.mean(streak_3plus) * bk_3plus - 1) * 100:.1f}%", 
+                delta="Value!" if (np.mean(streak_3plus) * bk_3plus - 1) > 0 else "No value")
